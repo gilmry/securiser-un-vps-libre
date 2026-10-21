@@ -1,0 +1,334 @@
+RECETTE : SÉCURISER UN VPS EN COUCHES, AVEC DES OUTILS LIBRES
+
+Cible : un VPS Ubuntu qui sert des applications Docker derrière un reverse
+proxy (Traefik dans nos exemples). Chaque étape donne l'objectif, les
+commandes, la vérification qui prouve que ça marche, et le retour arrière.
+
+Règles avant de commencer
+  - Lisez chaque commande avant de la lancer. Adaptez les noms entre <...>.
+  - Ouvrez la console de secours de votre hébergeur dans un autre onglet
+    AVANT toute étape qui touche au pare-feu ou à SSH.
+  - Une étape à la fois. On vérifie, puis on passe à la suivante.
+  - Versionnez chaque fichier de configuration (étape 8) dès qu'il existe.
+
+Ordre conseillé : 0, 1, 2, 3, 4, puis 5, 6, 7. L'étape 8 accompagne tout.
+
+
+------------------------------------------------------------------------
+ÉTAPE 0. MESURER LE TROU (10 minutes, lecture seule)
+------------------------------------------------------------------------
+
+Objectif : savoir si votre détecteur voit des sources que votre système de
+bannissement ignore.
+
+Si Suricata et CrowdSec tournent déjà :
+
+    sudo ./scripts/ecart-suricata-crowdsec.sh 24
+
+Le script liste les adresses les plus vues par Suricata sur 24 heures, et
+dit pour chacune si CrowdSec a une décision en cours.
+
+Lecture : des centaines d'alertes pour une source sans aucune décision, c'est
+le trou décrit dans l'article. Ce n'est pas une panne, c'est la conception :
+CrowdSec ne voit que ce que le proxy journalise.
+
+
+------------------------------------------------------------------------
+ÉTAPE 1. PARE-FEU FERMÉ PAR DÉFAUT
+------------------------------------------------------------------------
+
+Objectif : seuls 80, 443 et (provisoirement) 22 entrent.
+
+    sudo ufw default deny incoming
+    sudo ufw default allow outgoing
+    sudo ufw allow 22/tcp
+    sudo ufw allow 80/tcp
+    sudo ufw allow 443/tcp
+    sudo ufw enable
+
+Piège Docker : un port publié par Docker (ports: "5432:5432") contourne
+ufw, car Docker écrit ses propres règles avant celles d'ufw. Publiez les
+services internes sur 127.0.0.1 uniquement :
+
+    ports:
+      - "127.0.0.1:5432:5432"
+
+Vérifier, depuis une autre machine :
+
+    nmap -Pn <ip-du-serveur>        # seuls 22, 80, 443 doivent répondre
+
+Retour arrière : sudo ufw disable
+
+
+------------------------------------------------------------------------
+ÉTAPE 2. CROWDSEC ET BOUNCER DU REVERSE PROXY
+------------------------------------------------------------------------
+
+Objectif : bannir automatiquement les sources hostiles vues dans le journal
+du proxy, et appliquer les listes de blocage communautaires.
+
+Fichiers : config/crowdsec/
+
+  1. Traefik doit écrire son journal d'accès en JSON dans un volume partagé
+     (--accesslog=true, --accesslog.filepath=/var/log/traefik/access.log,
+     --accesslog.format=json).
+  2. Ajoutez le service crowdsec (docker-compose.crowdsec.yml) sur le même
+     réseau Docker que Traefik, avec acquis.yaml.
+  3. Démarrez crowdsec seul, puis créez une clé pour le bouncer :
+
+         docker exec crowdsec cscli bouncers add traefik-bouncer -o raw
+
+  4. Copiez traefik-bouncer.yml.template HORS du dossier lu par le provider
+     file de Traefik, remplacez __BOUNCER_KEY__ dans la copie réelle, et
+     ne commitez jamais la clé.
+  5. Activez le plugin bouncer sur l'entrypoint public de Traefik.
+
+Piège : si le template reste dans le dossier lu par Traefik, il définit le
+même middleware que le vrai fichier. Traefik n'enregistre alors aucun des
+deux, sans erreur claire au démarrage.
+
+Vérifier :
+
+    docker exec crowdsec cscli metrics            # des lignes sont lues
+    docker exec crowdsec cscli decisions add --ip <ip-de-test> --duration 2m
+    curl -I https://<votre-domaine>/              # depuis <ip-de-test> : 403
+    docker exec crowdsec cscli decisions delete --ip <ip-de-test>
+
+Retour arrière : retirer le middleware de l'entrypoint et redémarrer Traefik.
+
+Décidez dès maintenant (principe 4) : si CrowdSec tombe, le bouncer doit-il
+répondre 403 partout ou laisser passer ? Écrivez votre choix quelque part.
+
+
+------------------------------------------------------------------------
+ÉTAPE 3. BLOCAGE AU PARE-FEU, CONTENEURS COMPRIS
+------------------------------------------------------------------------
+
+Objectif : une adresse bannie est coupée avant le proxy, même si elle
+n'envoie que des requêtes que le proxy ne journalise pas.
+
+  1. Rendez l'API de CrowdSec joignable depuis l'hôte, en local uniquement,
+     dans docker-compose.crowdsec.yml :
+
+         ports:
+           - "127.0.0.1:8080:8080"
+
+  2. Installez le bouncer depuis le dépôt de paquets de CrowdSec (voir leur
+     documentation) : paquet crowdsec-firewall-bouncer-iptables.
+  3. Créez sa clé :
+
+         docker exec crowdsec cscli bouncers add firewall-hote -o raw
+
+  4. Dans /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml, reportez
+     la clé, l'URL http://127.0.0.1:8080/ et les chaînes (extrait dans
+     config/crowdsec/firewall-bouncer.extrait.yaml) :
+
+         iptables_chains:
+           - INPUT
+           - FORWARD
+           - DOCKER-USER
+
+     Sans DOCKER-USER, rien de ce qui va vers un conteneur n'est filtré.
+
+  5. sudo systemctl enable --now crowdsec-firewall-bouncer
+
+Vérifier :
+
+    systemctl is-active crowdsec-firewall-bouncer     # active
+    sudo iptables -S DOCKER-USER                       # une règle du bouncer
+    docker exec crowdsec cscli bouncers list           # dernier contact récent
+    docker exec crowdsec cscli decisions add --ip <ip-de-test> --duration 5m
+    # depuis <ip-de-test> : la connexion TCP au port 443 n'aboutit plus
+    docker exec crowdsec cscli decisions delete --ip <ip-de-test>
+
+Retour arrière :
+
+    sudo systemctl disable --now crowdsec-firewall-bouncer
+
+Vérifiez ensuite que la chaîne DOCKER-USER ne contient plus de règle du
+bouncer.
+
+
+------------------------------------------------------------------------
+ÉTAPE 4. ALERTER SUR LA CHAÎNE, PAS SUR LE BRUIT
+------------------------------------------------------------------------
+
+Objectif : être prévenu quand un maillon casse, et seulement alors.
+
+Fichiers : config/prometheus/alertes.yml, scripts/suricata-metrics.sh,
+scripts/aide-metric.sh, config/cron.d/durcissement.exemple
+
+  1. Activez le textfile collector de node-exporter, sur le dossier
+     /var/lib/prometheus/node-exporter.
+  2. Installez les scripts de métriques et le cron.
+  3. Chargez les règles d'alerte dans Prometheus.
+  4. Témoin externe : la règle Watchdog est toujours active. Routez-la dans
+     Alertmanager vers un service extérieur de type « dead man's switch »
+     (healthchecks.io a une offre gratuite). Si le service ne reçoit plus
+     rien, c'est que votre supervision est morte : il vous prévient.
+
+Ce qu'il faut couvrir, au minimum :
+  - Suricata arrêté, ou ses métriques qui ne se rafraîchissent plus ;
+  - un scan de durcissement en échec (AIDE, rkhunter, Lynis) ;
+  - le bouncer pare-feu inactif (un textfile du type
+    crowdsec_firewall_bouncer_up, produit par systemctl is-active) ;
+  - le témoin Watchdog absent, vu de l'extérieur.
+
+Vérifier : arrêtez Suricata deux minutes sur une machine de test, l'alerte
+doit arriver. Coupez Prometheus, le service externe doit vous prévenir.
+
+Retour arrière : retirer le fichier de règles et recharger Prometheus.
+
+
+------------------------------------------------------------------------
+ÉTAPE 5. SSH UNIQUEMENT PAR WIREGUARD
+------------------------------------------------------------------------
+
+Objectif : SSH n'est plus joignable depuis Internet.
+
+Avant : listez TOUT ce qui se connecte en SSH depuis l'extérieur (vous, mais
+aussi une CI qui déploie par SSH, un outil d'automatisation). Regardez le
+journal des connexions acceptées sur 30 jours :
+
+    sudo zgrep -h 'Accepted' /var/log/auth.log* | awk '{print $9, $11}' | sort | uniq -c
+
+Si une CI déploie par SSH, elle cassera : à adapter d'abord.
+
+  1. Installez WireGuard sur le serveur et sur votre poste, créez une paire
+     de clés de chaque côté, un réseau privé (exemple 10.8.0.0/24), et
+     ouvrez le port UDP de WireGuard :
+
+         sudo ufw allow 51820/udp
+
+  2. Vérifiez que « ssh <utilisateur>@10.8.0.1 » marche à travers le tunnel.
+  3. Programmez un retour arrière automatique AVANT de fermer le port 22 :
+
+         sudo systemd-run --on-active=300 /usr/sbin/ufw allow 22/tcp
+
+  4. Fermez le port 22 public, et autorisez-le sur l'interface du tunnel :
+
+         sudo ufw delete allow 22/tcp
+         sudo ufw allow in on wg0 to any port 22 proto tcp
+
+  5. Ouvrez une NOUVELLE session SSH par le tunnel. Si elle marche, annulez
+     le retour arrière programmé (systemctl list-timers, puis
+     sudo systemctl stop <nom-du-timer-run-...>). Sinon, attendez cinq
+     minutes : le port 22 se rouvre tout seul.
+
+Profitez-en pour fermer la connexion directe de root : PermitRootLogin no
+dans /etc/ssh/sshd_config.
+
+Vérifier, depuis Internet hors tunnel :
+
+    nc -vz -w 3 <ip-du-serveur> 22                # doit échouer
+
+Retour arrière : sudo ufw allow 22/tcp
+
+
+------------------------------------------------------------------------
+ÉTAPE 6. SURICATA COMME SOURCE DE DÉCISIONS
+------------------------------------------------------------------------
+
+Objectif : une source vue par Suricata peut être bannie, sans que Suricata
+bloque quoi que ce soit lui-même.
+
+Prérequis : l'étape 3, sinon une décision ne coupe rien au niveau TCP.
+
+  1. Suricata en mode IDS (af-packet), sortie eve.json activée.
+  2. Montez /var/log/suricata en lecture seule dans le conteneur crowdsec
+     et ajoutez à acquis.yaml :
+
+         ---
+         filenames:
+           - /var/log/suricata/eve.json
+         labels:
+           type: suricata-evelogs
+
+  3. Installez la collection Suricata de CrowdSec :
+
+         docker exec crowdsec cscli collections install crowdsecurity/suricata
+
+  4. Mettez ses scénarios en SIMULATION pendant deux semaines :
+     les décisions sont calculées et visibles, mais pas appliquées.
+
+         docker exec crowdsec cscli scenarios list | grep -i suricata
+         docker exec crowdsec cscli simulation enable <nom-du-scénario>
+
+  5. Liste blanche : vos propres adresses, celles de votre CI, le réseau
+     Docker. Une décision contre vous-même est la panne la plus bête.
+  6. Après deux semaines, relisez les décisions simulées. Si elles sont
+     justes, désactivez la simulation.
+
+Piège : un scan réparti sur des centaines d'adresses d'un même bloc
+n'atteint jamais un seuil par adresse. Décidez en connaissance de cause si
+vous bannissez par bloc, au risque de couper des utilisateurs légitimes.
+
+Retour arrière : docker exec crowdsec cscli simulation enable --global
+
+
+------------------------------------------------------------------------
+ÉTAPE 7. INTÉGRITÉ DES FICHIERS : AIDE, RKHUNTER, LYNIS
+------------------------------------------------------------------------
+
+Objectif : savoir si un binaire ou une configuration a été modifié.
+
+    sudo apt install aide rkhunter lynis
+    sudo aideinit                       # base de référence initiale
+
+Sur Ubuntu, le paquet lance AIDE chaque jour par un timer systemd. Ne
+relancez pas un second scan par cron : lisez le résultat avec
+scripts/aide-metric.sh.
+
+Piège 1 : le code de sortie du service systemd vaut 0 même quand AIDE trouve
+des différences, parce que la sortie passe dans un pipe. Lisez le rapport,
+pas systemd.
+
+Piège 2 : chaque mise à jour de paquet modifie des fichiers. Sans filtrage,
+l'alerte est rouge tous les jours et plus personne ne la lit.
+aide-metric.sh considère comme expliqué un fichier qui appartient à un
+paquet ET que dpkg --verify déclare conforme. Tout le reste reste un signal.
+
+Piège 3 : certains fichiers changent seuls sans appartenir à aucun paquet.
+Il faut les exclure du périmètre, avec méthode :
+voir METHODE-EXCLUSIONS-AIDE.txt.
+
+Vérifier : modifiez un fichier de test sous /etc sur une machine de test,
+attendez le passage suivant : il doit apparaître « non expliqué ».
+
+rkhunter : après chaque salve de mises à jour, il signale les binaires
+changés. Vérifiez qu'ils sont conformes (dpkg --verify) AVANT de lancer
+« rkhunter --propupd », jamais l'inverse.
+
+
+------------------------------------------------------------------------
+ÉTAPE 8. TOUT VERSIONNER, DÉPLOYER PAR COPIE
+------------------------------------------------------------------------
+
+Objectif : la machine est la copie d'un dépôt git, et on sait dire quand
+elle s'en écarte.
+
+Fichiers : deploiement/
+
+  - deploiements.tsv.exemple : la table « fichier du dépôt, chemin
+    déployé, propriétaire, mode, commande à lancer après ».
+  - deploie.sh : sans argument, montre ce qui changerait. Avec
+    --appliquer, demande confirmation puis copie. Refuse de tourner si le
+    dépôt a des changements non commités.
+  - derive.sh : lecture seule. Code 0 si la machine et le dépôt sont
+    identiques, 1 sinon.
+
+Pourquoi par copie et pas par lien symbolique : cron ignore sans rien dire
+un lien de /etc/cron.d vers un fichier qui n'appartient pas à root, et AIDE
+ne surveille pas forcément le dossier où vit le dépôt.
+
+Lancez derive.sh chaque semaine, ou faites-en une métrique.
+
+
+------------------------------------------------------------------------
+ET ENSUITE
+------------------------------------------------------------------------
+
+Les outils couvrent surtout Protéger et Détecter. Pour Gouverner, Répondre
+et Récupérer, il faut des documents : qui fait quoi, que faire en cas
+d'incident, comment restaurer. Et un exercice de restauration réel, au
+moins une fois par an.

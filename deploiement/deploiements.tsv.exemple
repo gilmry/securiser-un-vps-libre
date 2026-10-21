@@ -1,0 +1,6 @@
+# depot	deploye	proprietaire	mode	a faire apres deploiement
+# Separateur : tabulation. Copier ce fichier en deploiements.tsv et l'adapter.
+config/prometheus/alertes.yml	/opt/supervision/prometheus/alertes.yml	root:root	644	docker restart prometheus
+scripts/aide-metric.sh	/usr/local/bin/aide-metric.sh	root:root	755	rien (lance par cron)
+scripts/suricata-metrics.sh	/usr/local/bin/suricata-metrics.sh	root:root	755	rien (lance par cron)
+config/cron.d/durcissement.exemple	/etc/cron.d/durcissement	root:root	644	rien (cron relit seul)

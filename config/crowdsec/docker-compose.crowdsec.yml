@@ -1,0 +1,35 @@
+# Ajout CrowdSec à un Traefik existant. Fusionner avec le compose Traefik
+# de chaque serveur (docker compose -f docker-compose.yml -f
+# docker-compose.crowdsec.yml up -d) plutôt que de dupliquer Traefik.
+#
+# Suppose que le Traefik ciblé :
+#   - écrit ses access logs en JSON dans un volume nommé `traefik_logs`
+#     (--accesslog=true --accesslog.filepath=/var/log/traefik/access.log
+#      --accesslog.format=json)
+#   - charge le provider file sur /etc/traefik/dynamic
+#     (--providers.file.directory=/etc/traefik/dynamic --providers.file.watch=true)
+#   - enregistre le plugin bouncer et l'attache à l'entrypoint public
+#     (voir README.md pour les flags exacts)
+#   - est sur le même réseau Docker que ce service crowdsec
+
+services:
+  crowdsec:
+    image: crowdsecurity/crowdsec:latest   # epinglez une version en production
+    container_name: crowdsec
+    restart: unless-stopped
+    environment:
+      COLLECTIONS: crowdsecurity/traefik crowdsecurity/http-cve crowdsecurity/base-http-scenarios
+    volumes:
+      - crowdsec_data:/var/lib/crowdsec/data
+      - crowdsec_config:/etc/crowdsec
+      - ./crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml:ro
+      - traefik_logs:/var/log/traefik:ro
+      # Pour le bouncer pare-feu de l'hote (RECETTE.txt, etape 3) :
+      # API joignable depuis l'hote, en local uniquement.
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  crowdsec_data:
+  crowdsec_config:
+  traefik_logs:

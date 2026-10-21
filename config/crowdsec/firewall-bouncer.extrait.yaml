@@ -1,0 +1,14 @@
+# Extrait de /etc/crowdsec/bouncers/crowdsec-firewall-bouncer.yaml
+# (paquet crowdsec-firewall-bouncer-iptables). Ne remplacez que ces cles,
+# gardez le reste du fichier livre par le paquet.
+
+api_url: http://127.0.0.1:8080/
+api_key: <cle donnee par : cscli bouncers add firewall-hote -o raw>
+
+# DOCKER-USER est indispensable sur un hote Docker : sans elle, le trafic a
+# destination des conteneurs n'est pas filtre, donc aucun site n'est protege.
+# C'est aussi pourquoi `ufw deny from <ip>` est sans effet sur ce trafic.
+iptables_chains:
+  - INPUT
+  - FORWARD
+  - DOCKER-USER

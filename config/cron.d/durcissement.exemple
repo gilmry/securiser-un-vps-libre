@@ -1,0 +1,21 @@
+# Scans de durcissement et metriques pour node-exporter (textfile collector).
+# A copier dans /etc/cron.d/ (proprietaire root, mode 644, pas de lien).
+# Chaque metrique est ecrite dans un .tmp puis renommee : jamais de fichier
+# a moitie ecrit lu par node-exporter.
+P=/var/lib/prometheus/node-exporter
+
+# rkhunter, chaque nuit
+0 4 * * * root /usr/bin/rkhunter --check --skip-keypress --report-warnings-only >> /var/log/rkhunter-cron.log 2>&1; echo "hardening_check_status{check=\"rkhunter\"} $?" > $P/.rkhunter.prom.tmp && mv $P/.rkhunter.prom.tmp $P/rkhunter.prom
+
+# Lynis, chaque dimanche
+0 3 * * 0 root /usr/sbin/lynis audit system --quick --quiet --no-colors >> /var/log/lynis-cron.log 2>&1; echo "hardening_check_status{check=\"lynis\"} $?" > $P/.lynis.prom.tmp && mv $P/.lynis.prom.tmp $P/lynis.prom
+
+# AIDE : le scan est fait par le timer du paquet (vers 3 h sur Ubuntu).
+# On lit seulement son rapport, apres coup.
+0 5 * * * root /usr/local/bin/aide-metric.sh
+
+# Suricata
+*/2 * * * * root /usr/local/bin/suricata-metrics.sh
+
+# Bouncer pare-feu CrowdSec : 1 si le service tourne
+*/2 * * * * root if systemctl is-active --quiet crowdsec-firewall-bouncer; then v=1; else v=0; fi; echo "crowdsec_firewall_bouncer_up $v" > $P/.bouncer.prom.tmp && mv $P/.bouncer.prom.tmp $P/bouncer.prom

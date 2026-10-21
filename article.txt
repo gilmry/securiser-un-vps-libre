@@ -1,0 +1,175 @@
+SÉCURISER UN PETIT SERVEUR SANS BUDGET
+Une stratégie en couches, et ce qu'en dirait CyFun
+
+Gilles Maury, octobre 2026. Licence MIT.
+
+
+EN BREF
+
+Des outils libres et gratuits suffisent à bien protéger un serveur, à une
+condition : qu'ils soient reliés entre eux, et que quelqu'un vérifie que ces
+liens tiennent. Installer des outils ne suffit pas.
+
+Sur notre serveur, un détecteur d'intrusion, un système de bannissement, un
+contrôle d'intégrité et une supervision tournaient tous normalement. Un soir
+de septembre 2026, le détecteur a levé 5 753 alertes en sept heures, pendant
+que le système de bannissement prenait zéro décision. Aucun outil n'était en
+panne. Ils ne se parlaient pas.
+
+
+1. CYFUN EN DEUX MINUTES
+
+CyFun (CyberFundamentals) est le cadre de cybersécurité du Centre pour la
+Cybersécurité Belgique (CCB), utilisé pour mettre en oeuvre NIS2. Il repose
+surtout sur le NIST Cybersecurity Framework ; la version 2025 suit le NIST
+CSF 2.0.
+
+Il compte trois niveaux d'assurance, Basic, Important et Essential, précédés
+d'un niveau d'entrée, Small, pour les micro-organisations. Chaque niveau
+renforce le précédent.
+
+Essential est le plus exigeant : ses mesures doivent résister à des attaques
+sophistiquées, menées par des acteurs qui ont des moyens et de l'expertise.
+Il ajoute des contrôles de management, évalués à chaque audit de
+certification. En Belgique, les entités essentielles au sens de NIS2 doivent
+faire évaluer leurs mesures par un organisme accrédité.
+
+Un petit projet libre n'est presque jamais une entité essentielle. Nous
+utilisons pourtant le niveau Essential comme grille de lecture : c'est la
+façon la plus simple de voir ce qui manque.
+
+
+2. LA STRATÉGIE EN SIX PRINCIPES
+
+  1. Réduire la surface avant de la surveiller.
+     Pare-feu fermé par défaut, seuls les ports web sont publics. SSH passe
+     par un tunnel WireGuard et disparaît d'Internet.
+
+  2. Un seul moteur de décision, plusieurs capteurs.
+     CrowdSec décide. Les journaux du reverse proxy, de SSH et les alertes de
+     Suricata l'alimentent. Suricata détecte, il ne bloque pas.
+
+  3. Deux points de blocage, chacun à son niveau.
+     Le pare-feu de l'hôte coupe les adresses bannies avant les applications.
+     Le reverse proxy ne garde que ce qui exige de lire la requête HTTP.
+
+  4. Choisir à l'avance le comportement en panne.
+     Si le moteur de décision tombe, faut-il tout bloquer ou tout laisser
+     passer ? Les deux se défendent. Le découvrir en incident, non.
+
+  5. Superviser la chaîne, pas le bruit.
+     Une alerte doit appeler une action. On alerte quand un maillon casse :
+     bloqueur déconnecté, journal muet, adresse vue mais jamais bannie,
+     supervision qui ne donne plus signe de vie.
+
+  6. Tout en code, identique partout.
+     La configuration vit dans git, se déploie par un script et se vérifie
+     par un autre script qui compare la machine au dépôt.
+
+Schéma :
+
+    Internet
+       |
+    [Pare-feu de l'hôte]  <------- bans -------+
+       |                                       |
+    [Reverse proxy + bouncer] <---- bans ------+
+       |                                       |
+    [Applications]                     [CrowdSec : décision]
+                                          ^           |
+                                  alertes |           | métriques
+                                          |           v
+                                    [Capteurs]   [Supervision]
+                                                 + témoin externe
+
+
+3. LA BOÎTE À OUTILS, ENTIÈREMENT LIBRE
+
+  Pare-feu de l'hôte ......... nftables ou iptables
+  Accès d'administration ..... WireGuard
+  Moteur de décision ......... CrowdSec, édition libre
+  Blocage réseau ............. crowdsec-firewall-bouncer
+  Blocage applicatif ......... bouncer CrowdSec du reverse proxy
+  Détection réseau ........... Suricata, en mode IDS
+  Intégrité des fichiers ..... AIDE
+  Rootkits ................... rkhunter
+  Audit de durcissement ...... Lynis
+  Supervision ................ Prometheus et Alertmanager
+  Configuration .............. git et deux scripts
+
+Seule exception au « tout sur la machine » : la surveillance de la
+supervision doit vivre ailleurs. Un service gratuit de type « dead man's
+switch », ou un second serveur, suffit.
+
+
+4. CINQ PIÈGES QUE NOUS AVONS VÉCUS
+
+  - Le bannissement ne voit que ce qui est journalisé.
+    5 753 alertes, zéro décision : les requêtes malformées étaient rejetées
+    avant d'être écrites dans le journal du proxy. Croisez deux sources
+    indépendantes ; un écart massif signe le trou.
+
+  - ufw ne protège pas les conteneurs.
+    Docker insère ses règles avant celles d'ufw. Le seul point efficace est
+    la chaîne DOCKER-USER.
+
+  - La supervision était morte.
+    Prometheus arrêté onze jours ; Alertmanager tournait et donnait le
+    change. Il faut un témoin vérifié depuis l'extérieur.
+
+  - L'alerte était toujours rouge.
+    Le contrôle d'intégrité signalait chaque nuit 166 changements légitimes.
+    Plus personne ne lisait l'alerte. Exclure le bruit, fichier par fichier,
+    et dater chaque exclusion.
+
+  - Le bloqueur bloquait tout.
+    Quand le moteur de décision est tombé, tous les sites ont répondu 403.
+
+Le fil commun : un outil installé et « vert » ne prouve rien. Ce qui
+protège, c'est le lien entre les outils, et la preuve régulière qu'il tient.
+
+
+5. CE QUE LA STRATÉGIE COUVRE AU REGARD DE CYFUN
+
+  Gouverner ..... faible. Manquent : rôles, politique, revue par la direction.
+  Identifier .... partiel. Manquent : inventaire complet, analyse de risques.
+  Protéger ...... solide. Manquent : gestion des accès d'équipe, formation.
+  Détecter ...... solide. Manquent : journaux centralisés et conservés.
+  Répondre ...... faible. Manque : un plan d'incident écrit et testé.
+  Récupérer ..... faible. Manquent : sauvegardes hors site, restauration testée.
+
+Le prochain gain ne viendra pas d'un outil de plus, mais d'un document de
+plus, et d'un exercice de restauration.
+
+
+6. CE QUE LA GRATUITÉ NE COUVRE PAS
+
+  - Le temps : relier, trier, lire. C'est le vrai prix.
+  - Les sauvegardes hors site : il faut un stockage ailleurs.
+  - L'humain : quelqu'un qui sait quoi faire à 3 heures du matin, et une
+    deuxième personne capable de prendre le relais.
+  - La certification CyFun, payante. La grille, elle, est gratuite.
+
+
+7. PAR OÙ COMMENCER
+
+Cette semaine : comparez le journal de votre détecteur réseau avec les
+décisions de votre système de bannissement (RECETTE.txt, étape 0).
+
+Ensuite, dans l'ordre :
+  1. Brancher le bannissement sur le pare-feu, DOCKER-USER compris.
+  2. Alerter sur la chaîne, avec un témoin externe.
+  3. Retirer SSH d'Internet avec WireGuard.
+  4. Faire de Suricata une source de décisions, en simulation d'abord.
+  5. Ouvrir la grille CyFun : Gouverner, Répondre, Récupérer.
+
+Une protection qui tient dans un dépôt git et se vérifie par un script se
+transmet. Une protection qui tient dans la tête d'une seule personne, non.
+
+
+SOURCES
+
+  - CCB, booklet CyFun 2025 niveau Essential, version 2025-10-01 :
+    https://www.cyfun.be
+  - NCSC Irlande, FAQ CyFun : https://ncsc.gov.ie/CyFun/CyFunFAQ
+  - Forum for the Future, 7 étapes pour se conformer à NIS2 :
+    https://blog.forumforthefuture.be/fr/article/7-etapes-pour-se-conformer-a-la-nouvelle-legislation-sur-la-cybersecurite/24104

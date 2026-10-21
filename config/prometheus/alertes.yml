@@ -1,0 +1,121 @@
+# Regles d'alerte Prometheus : surveiller la CHAINE de protection.
+#
+# Principe : une alerte doit appeler une action. On alerte quand un maillon
+# casse (detecteur arrete, collecteur muet, bloqueur inactif, scan en echec),
+# pas sur le volume d'alertes de faible severite, qui est du bruit Internet.
+#
+# Metriques produites par les scripts de ce depot via le textfile collector
+# de node-exporter (voir config/cron.d/durcissement.exemple).
+
+groups:
+  - name: temoin
+    rules:
+      # Toujours active. A router dans Alertmanager vers un service externe de
+      # type « dead man's switch » : s'il ne recoit plus rien, c'est que la
+      # supervision est morte, et c'est lui qui vous previent.
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "Temoin de vie de la supervision"
+
+  - name: hote
+    rules:
+      - alert: HostDiskSpaceLow
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) < 0.15
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disque racine < 15 % libre"
+          description: "{{ $value | humanizePercentage }} d'espace libre restant sur /."
+
+      - alert: HostHighMemory
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RAM > 90 % utilisee"
+          description: "Memoire disponible basse depuis au moins 10 minutes."
+
+  - name: durcissement
+    rules:
+      - alert: HardeningCheckFailed
+        expr: hardening_check_status != 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scan de durcissement {{ $labels.check }} en echec ou en alerte"
+          description: >-
+            Dernier run de {{ $labels.check }} sorti en code {{ $value }}.
+            AIDE : 1/2/4 et leurs sommes = ajouts/suppressions/modifications
+            non expliques, >13 = erreur, 99 = resultat perime ou absent.
+            Methode de diagnostic : METHODE-EXCLUSIONS-AIDE.txt.
+
+  - name: blocage
+    rules:
+      # Sans ce bouncer, une IP bannie n'est coupee que si ses requetes
+      # atteignent le journal du proxy.
+      - alert: FirewallBouncerDown
+        expr: crowdsec_firewall_bouncer_up == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Le bouncer pare-feu CrowdSec ne tourne plus"
+          description: "Les decisions CrowdSec ne sont plus appliquees au pare-feu. Voir `systemctl status crowdsec-firewall-bouncer`."
+
+      - alert: FirewallBouncerMetricsMissing
+        expr: absent(crowdsec_firewall_bouncer_up)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Metrique du bouncer pare-feu absente"
+          description: "Le cron qui ecrit crowdsec_firewall_bouncer_up ne tourne plus : l'alerte FirewallBouncerDown est aveugle."
+
+  - name: detection
+    rules:
+      - alert: SuricataDown
+        expr: suricata_up == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Suricata est arrete"
+          description: "Plus aucune detection reseau depuis au moins 5 minutes. Voir `systemctl status suricata`."
+
+      # Si le collecteur meurt, les autres regles Suricata deviennent muettes.
+      - alert: SuricataMetricsStale
+        expr: time() - suricata_metrics_last_run_timestamp_seconds > 900
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Les metriques Suricata ne sont plus rafraichies"
+          description: "Le collecteur n'a pas tourne depuis {{ $value | humanizeDuration }}. Les alertes Suricata sont aveugles."
+
+      # Au-dela d'environ 1 % de perte en capture, Suricata analyse un flux
+      # troue et peut manquer des detections.
+      - alert: SuricataCaptureDropHigh
+        expr: |
+          rate(suricata_capture_kernel_drops_total[15m])
+            / clamp_min(rate(suricata_capture_kernel_packets_total[15m]), 1) > 0.01
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Suricata perd plus de 1 % des paquets en capture"
+          description: "Taux de perte {{ $value | humanizePercentage }} sur 15 min. Envisager d'augmenter ring-size (af-packet)."
+
+      - alert: SuricataEveLogGrowth
+        expr: suricata_eve_log_bytes > 1073741824
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "eve.json depasse 1 Go"
+          description: "Verifier la rotation des journaux et qu'aucun type d'evenement verbeux (flow, stats) n'a ete active."

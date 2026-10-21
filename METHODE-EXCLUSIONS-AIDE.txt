@@ -1,0 +1,89 @@
+MÉTHODE : RENDRE AIDE LISIBLE SANS SE CRÉER D'ANGLE MORT
+
+Pourquoi ce fichier ne contient pas nos exclusions
+--------------------------------------------------
+Une liste d'exclusions dit exactement où le contrôle d'intégrité ne regarde
+pas. Publiée, c'est une carte pour un attaquant. Ce fichier donne donc la
+méthode, pas la liste.
+
+
+Le problème
+-----------
+Une alerte d'intégrité allumée tous les jours n'est plus lue. Le jour où un
+vrai binaire est altéré, l'alerte arrive dans le même mail que des centaines
+de changements normaux. Une alerte toujours rouge ne protège de rien.
+
+Il y a trois sortes de bruit, à traiter chacune avec son outil :
+
+  1. Les mises à jour de paquets.
+     Traitement : filtrage par dpkg (scripts/aide-metric.sh). Un fichier
+     qui appartient à un paquet et que dpkg --verify déclare conforme est
+     expliqué. On n'exclut rien.
+
+  2. Les répertoires dont seul l'horodatage bouge.
+     Traitement : filtrage dans aide-metric.sh. Si seuls mtime, ctime ou
+     inode changent sur un répertoire, c'est l'écho d'un ajout ou d'une
+     suppression à l'intérieur. Le fichier concerné, s'il est surveillé, a
+     sa propre entrée.
+
+  3. Les fichiers qui changent seuls et n'appartiennent à aucun paquet.
+     Traitement : exclusion du périmètre, dans un fichier de configuration
+     dédié (par exemple /etc/aide/aide.conf.d/00_local_excludes).
+
+
+Les règles d'une bonne exclusion
+--------------------------------
+  - Une exclusion par motif, jamais en vrac. Chaque bloc porte sa date,
+    le constat qui l'a motivée, et ce qui reste surveillé à côté.
+  - La plus étroite possible : un fichier plutôt qu'un répertoire, un
+    sous-arbre plutôt qu'un arbre. Ancrez la fin avec $ :
+        !/var/lib/exemple/fichier-etat\.cache$
+  - Si seul l'horodatage d'un fichier change, n'excluez pas le fichier :
+    retirez seulement les attributs de temps, le contenu reste surveillé.
+        /etc/exemple/fichier-reecrit-a-l-identique$ Full-m-c-i
+  - Jamais d'exclusion sur un binaire, une bibliothèque, /etc/ssh, les
+    clés autorisées, les fichiers de démarrage du shell, sudoers.
+  - Contrepartie écrite : pour chaque exclusion, une phrase qui dit ce
+    qu'AIDE ne verra plus.
+
+
+Avant d'exclure : tester
+------------------------
+AIDE dit quelle règle s'applique à un chemin, sans lancer de scan :
+
+    sudo aide --config /etc/aide/aide.conf --dry-init --limit '^/var/lib/exemple'
+
+Lisez la ligne de chaque chemin : « selective rule » = surveillé,
+« negative rule » = exclu. Pour tester une nouvelle exclusion sans toucher
+à la production, travaillez sur une copie :
+
+    T=$(mktemp -d)
+    sudo cp -r /etc/aide/. "$T"/
+    sudo cp mon-fichier-d-exclusions "$T"/aide.conf.d/
+    sudo sed -i "s#/etc/aide/#$T/#g" "$T"/aide.conf
+    sudo aide --config "$T"/aide.conf --dry-init --limit '^/chemin/teste'
+    sudo rm -rf "$T"
+
+Piège : une règle négative récursive élague tout le sous-arbre. Les règles
+positives plus profondes ne s'appliquent alors jamais, quel que soit leur
+ordre. Pour garder quelques fichiers dans un arbre exclu, utilisez une
+assertion négative :
+
+    !/home/utilisateur/(?!\.ssh(/|$)|\.bashrc$|\.profile$)
+    /home/utilisateur/\.ssh Full
+
+
+Diagnostiquer une alerte
+------------------------
+Ne lisez pas le nombre d'entrées, il ne veut rien dire. Pour chaque chemin
+non expliqué, corrélez son horodatage avec :
+
+  - /var/log/dpkg.log (une installation de paquet) ;
+  - le journal sudo : journalctl _COMM=sudo (une action d'administration) ;
+  - le journal des connexions SSH (le message d'accueil réécrit des
+    fichiers d'état à chaque connexion) ;
+  - les tâches cron quotidiennes (souvent à heure fixe, à la seconde près) ;
+  - vos propres déploiements.
+
+Une corrélation à la seconde près vaut explication. Un chemin sans
+corrélation est un signal : on cherche, on ne l'exclut pas.
