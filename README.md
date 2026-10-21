@@ -22,6 +22,13 @@ bruit.
 Commencez par `article.txt`, puis l'étape 0 de `RECETTE.txt` : elle dit en
 dix minutes si vous avez le même trou que nous.
 
+## Dogfooding
+
+Nous appliquons ce dépôt à nos propres serveurs. C'est un plancher, pas un
+plafond : le minimum que nous tenons. Certaines étapes sont en production,
+d'autres en cours ; la recette le dit étape par étape. Le dépôt évoluera au
+rythme de ce que nous éprouvons.
+
 ## Avertissements
 
 - Ces fichiers sont des **exemples à adapter**, pas un produit. Lisez chaque

@@ -13,10 +13,17 @@ Règles avant de commencer
 
 Ordre conseillé : 0, 1, 2, 3, 4, puis 5, 6, 7. L'étape 8 accompagne tout.
 
+État chez nous (dogfooding) : chaque étape porte une mention.
+  [en production]  appliquée et vérifiée sur nos serveurs ;
+  [en partie]      une partie seulement tourne chez nous ;
+  [en cours]       écrite d'après la documentation, pas encore éprouvée
+                   chez nous. Lisez-la avec un oeil critique.
+
 
 ------------------------------------------------------------------------
 ÉTAPE 0. MESURER LE TROU (10 minutes, lecture seule)
 ------------------------------------------------------------------------
+[en production]
 
 Objectif : savoir si votre détecteur voit des sources que votre système de
 bannissement ignore.
@@ -36,6 +43,7 @@ CrowdSec ne voit que ce que le proxy journalise.
 ------------------------------------------------------------------------
 ÉTAPE 1. PARE-FEU FERMÉ PAR DÉFAUT
 ------------------------------------------------------------------------
+[en production]
 
 Objectif : seuls 80, 443 et (provisoirement) 22 entrent.
 
@@ -63,6 +71,7 @@ Retour arrière : sudo ufw disable
 ------------------------------------------------------------------------
 ÉTAPE 2. CROWDSEC ET BOUNCER DU REVERSE PROXY
 ------------------------------------------------------------------------
+[en production]
 
 Objectif : bannir automatiquement les sources hostiles vues dans le journal
 du proxy, et appliquer les listes de blocage communautaires.
@@ -103,6 +112,7 @@ répondre 403 partout ou laisser passer ? Écrivez votre choix quelque part.
 ------------------------------------------------------------------------
 ÉTAPE 3. BLOCAGE AU PARE-FEU, CONTENEURS COMPRIS
 ------------------------------------------------------------------------
+[en cours]
 
 Objectif : une adresse bannie est coupée avant le proxy, même si elle
 n'envoie que des requêtes que le proxy ne journalise pas.
@@ -152,6 +162,8 @@ bouncer.
 ------------------------------------------------------------------------
 ÉTAPE 4. ALERTER SUR LA CHAÎNE, PAS SUR LE BRUIT
 ------------------------------------------------------------------------
+[en partie : alertes Suricata et durcissement en production ; témoin
+externe et alerte sur le bouncer en cours]
 
 Objectif : être prévenu quand un maillon casse, et seulement alors.
 
@@ -183,6 +195,7 @@ Retour arrière : retirer le fichier de règles et recharger Prometheus.
 ------------------------------------------------------------------------
 ÉTAPE 5. SSH UNIQUEMENT PAR WIREGUARD
 ------------------------------------------------------------------------
+[en cours]
 
 Objectif : SSH n'est plus joignable depuis Internet.
 
@@ -228,6 +241,7 @@ Retour arrière : sudo ufw allow 22/tcp
 ------------------------------------------------------------------------
 ÉTAPE 6. SURICATA COMME SOURCE DE DÉCISIONS
 ------------------------------------------------------------------------
+[en cours]
 
 Objectif : une source vue par Suricata peut être bannie, sans que Suricata
 bloque quoi que ce soit lui-même.
@@ -269,6 +283,7 @@ Retour arrière : docker exec crowdsec cscli simulation enable --global
 ------------------------------------------------------------------------
 ÉTAPE 7. INTÉGRITÉ DES FICHIERS : AIDE, RKHUNTER, LYNIS
 ------------------------------------------------------------------------
+[en production]
 
 Objectif : savoir si un binaire ou une configuration a été modifié.
 
@@ -303,6 +318,7 @@ changés. Vérifiez qu'ils sont conformes (dpkg --verify) AVANT de lancer
 ------------------------------------------------------------------------
 ÉTAPE 8. TOUT VERSIONNER, DÉPLOYER PAR COPIE
 ------------------------------------------------------------------------
+[en production]
 
 Objectif : la machine est la copie d'un dépôt git, et on sait dire quand
 elle s'en écarte.

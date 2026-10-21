@@ -17,6 +17,19 @@ que le système de bannissement prenait zéro décision. Aucun outil n'était en
 panne. Ils ne se parlaient pas.
 
 
+NOTE : DU DOGFOODING, ET UN PLANCHER
+
+Tout ce qui est décrit ici, nous l'appliquons d'abord à nos propres
+serveurs. Ce n'est pas un plafond à atteindre un jour, c'est un plancher :
+le minimum en dessous duquel nous ne descendons plus.
+
+Ce plancher est en train de se construire. Certaines étapes tournent déjà
+chez nous en production ; d'autres (le bouncer pare-feu, SSH derrière
+WireGuard, Suricata comme source de décisions) sont en cours de mise en
+place. La recette le signale étape par étape. Le dépôt va évoluer au rythme
+de ce que nous éprouvons, avec les pièges rencontrés en chemin.
+
+
 1. CYFUN EN DEUX MINUTES
 
 CyFun (CyberFundamentals) est le cadre de cybersécurité du Centre pour la
